@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Breng Arthur naar bed</title>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;800&display=swap" rel="stylesheet">
+<style>
+  :root{--green:#1f5a3c;--cream:#f4ecd8;--ink:#2a1f17;--carpet:#8a6a55}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:#1a1410;font-family:"Bricolage Grotesque",system-ui,sans-serif;color:var(--ink);overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
+  #game{display:block;width:100vw;height:100vh;height:100dvh}
+  .panel{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(26,20,16,.72)}
+  .card{background:var(--cream);border-radius:18px;padding:24px 22px;max-width:380px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.5);text-align:center}
+  .sign{display:inline-block;background:var(--green);color:#e9f0e4;font-weight:800;letter-spacing:.06em;padding:6px 12px;border-radius:4px;font-size:13px;margin-bottom:10px}
+  h1{margin:4px 0 6px;font-size:30px;line-height:1.05;font-weight:800}
+  p{margin:8px 0;font-size:15px;line-height:1.4}
+  .how{text-align:left;font-size:14px;background:#fff8;border-radius:10px;padding:10px 12px;margin:12px 0}
+  .how div{margin:4px 0}
+  input{width:100%;font:inherit;font-size:18px;padding:12px;border:2px solid #c9b998;border-radius:10px;background:#fff;margin:8px 0;text-align:center}
+  button{font:inherit;font-weight:800;font-size:18px;border:0;border-radius:12px;padding:13px 18px;width:100%;background:var(--green);color:#fff;cursor:pointer;margin-top:6px}
+  button.sec{background:#d9ccb0;color:var(--ink)}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:15px}
+  td{padding:6px 4px;border-bottom:1px solid #e0d4ba;text-align:left}
+  td.r{text-align:right;font-variant-numeric:tabular-nums;font-weight:800}
+  tr.me td{background:#ffe9a8}
+  .muted{opacity:.6;font-size:12px}
+  .hidden{display:none}
+  .big{font-size:42px;font-weight:800;margin:4px 0}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="start" class="panel">
+  <div class="card">
+    <div class="sign">STAFF ONLY</div>
+    <h1>Breng Arthur naar bed</h1>
+    <p>Arthur moet naar <b>kamer 214</b>. Hij staat niet meer zo stevig en wil per se elke technische ruimte in.</p>
+    <div class="how">
+      <div>👆 <b>Tik aan de kant waar hij naartoe valt</b> om hem op te vangen (of ← →).</div>
+      <div>🚪 Bij een <b>STAFF ONLY</b>-deur: tik snel op hem om hem verder te trekken.</div>
+      <div>📱 Scherm kapot? Gewoon doorspelen.</div>
+      <div>❤️ 3 levens. Elke val of technische ruimte kost er één.</div>
+    </div>
+    <input id="name" maxlength="16" placeholder="Jouw naam" autocomplete="off">
+    <button id="go">Start</button>
+    <button id="showBoard" class="sec">Scorebord</button>
+  </div>
+</div>
+
+<div id="end" class="panel hidden">
+  <div class="card">
+    <div class="sign" id="endSign">KAMER 214</div>
+    <h1 id="endTitle"></h1>
+    <p id="endText"></p>
+    <div class="big" id="endScore"></div>
+    <table id="board"></table>
+    <div class="muted" id="boardNote"></div>
+    <button id="again">Opnieuw</button>
+  </div>
+</div>
+
+<script>
+// ---------- Leaderboard (shared via db, fallback local) ----------
+const LB = {
+  db:null, uid:null, ready:false,
+  async init(){
+    try{
+      if(!window.claude || !claude.use) return;
+      const t = new Promise(r=>setTimeout(()=>r(null),10000));
+      const [db,user] = await Promise.race([Promise.all([claude.use("db"),claude.use("user")]), t.then(()=>[null,null])]) || [null,null];
+      if(db && user){ this.db=db; this.uid=await user.id(); this.ready=!!this.uid; }
+    }catch(e){ this.db=null; }
+  },
+  norm(x){ if(!x) return null; if(typeof x.data==="function") return x.data(); if(x.data && typeof x.data==="object") return x.data; return x; },
+  async all(){
+    let rows=[];
+    if(this.ready){
+      try{
+        const res = await this.db.collection("scores").get();
+        const list = Array.isArray(res)?res:(res&&(res.docs||res.items||res.rows))||[];
+        for(const d of list){ const v=this.norm(d); if(v&&Array.isArray(v.runs)) rows.push(...v.runs); }
+        return {rows, shared:true};
+      }catch(e){}
+    }
+    try{ rows = JSON.parse(localStorage.getItem("arthurScores")||"[]"); }catch(e){}
+    return {rows, shared:false};
+  },
+  async add(run){
+    if(this.ready){
+      try{
+        const ref = this.db.doc("scores/"+this.uid);
+        let cur=null; try{ cur=this.norm(await ref.get()); }catch(e){}
+        const runs=(cur&&Array.isArray(cur.runs)?cur.runs:[]).concat(run).sort((a,b)=>b.score-a.score).slice(0,8);
+        await ref.set({runs});
+        return true;
+      }catch(e){}
+    }
+    try{
+      const r=JSON.parse(localStorage.getItem("arthurScores")||"[]"); r.push(run);
+      r.sort((a,b)=>b.score-a.score); localStorage.setItem("arthurScores",JSON.stringify(r.slice(0,20)));
+    }catch(e){}
+    return false;
+  }
+};
+LB.init();
+
+// ---------- Canvas ----------
+const cv=document.getElementById("game"), cx=cv.getContext("2d");
+let W,H,DPR,FLOOR,S;
+function resize(){
+  DPR=Math.min(window.devicePixelRatio||1,2);
+  W=cv.clientWidth; H=cv.clientHeight;
+  cv.width=W*DPR; cv.height=H*DPR; cx.setTransform(DPR,0,0,DPR,0,0);
+  S=Math.min(W/420,H/700)*1.0; S=Math.max(.7,Math.min(S,1.6));
+  FLOOR=H*0.68;
+}
+addEventListener("resize",resize); resize();
+
+// ---------- Game state ----------
+const GOAL=4200, DOOR_GAP=300;
+let G=null, playerName="", last=0, running=false;
+function newGame(){
+  const doors=[];
+  for(let x=380,i=0;x<GOAL+600;x+=DOOR_GAP,i++){
+    const staff = x<GOAL-200 && i>0 && (i%3===1 || (i%5===4 && x>1800));
+    doors.push({x, staff, num: 200+Math.floor(i)+1, done:false});
+  }
+  doors.forEach(d=>{ if(Math.abs(d.x-GOAL)<DOOR_GAP/2){ d.goal=true; d.staff=false; d.num=214; d.x=GOAL; }});
+  if(!doors.some(d=>d.goal)) doors.push({x:GOAL,staff:false,num:214,goal:true});
+  return {x:0, a:0.05, w:0, t:0, lives:3, falls:0, techs:0, state:"walk", st:0,
+    doors, pull:0, curDoor:null, glitch:0, nextGlitch:5, gseed:Math.random(), msg:"", msgT:0, taps:[], step:0, shake:0};
+}
+
+// ---------- Input ----------
+function push(dir){ // dir +1 = catch right lean, -1 = catch left lean
+  if(!running||!G) return;
+  if(G.state==="walk"||G.state==="pull"){
+    G.w -= dir*1.35;
+    if(G.state==="pull"){ G.pull-=10; if(G.pull<=0){ G.pull=0; G.curDoor.done=true; G.state="walk"; G.x+=20; say("Losgetrokken!"); } }
+    G.taps.push({x:arthurScreenX()+dir*60*S, y:FLOOR-110*S, t:0, dir});
+  }
+}
+function arthurScreenX(){ return W*0.5; }
+cv.addEventListener("pointerdown",e=>{ e.preventDefault(); push(e.clientX>arthurScreenX()?1:-1); });
+addEventListener("keydown",e=>{
+  if(e.key==="ArrowRight"||e.key==="l"){push(1);e.preventDefault();}
+  if(e.key==="ArrowLeft"||e.key==="a"){push(-1);e.preventDefault();}
+});
+
+// ---------- Update ----------
+function rnd(a,b){return a+Math.random()*(b-a)}
+function update(dt){
+  const g=G; g.t+=dt; g.msgT-=dt;
+  const diff=1+Math.min(g.x/GOAL,1)*0.9;
+  // glitch scheduling
+  g.nextGlitch-=dt;
+  if(g.nextGlitch<=0){ g.glitch=rnd(2,3.8); g.gseed=Math.random(); g.nextGlitch=rnd(6,11)/diff + g.glitch; }
+  if(g.glitch>0) g.glitch-=dt;
+
+  if(g.state==="walk"||g.state==="pull"){
+    // wobble physics
+    const wob = Math.sin(g.t*1.7)*0.6 + Math.sin(g.t*3.1+1)*0.4;
+    const ease=Math.min(1,g.t/4)*0.6+0.4;
+    g.w += (Math.sin(g.a)*2.4*diff + wob*0.8*diff + rnd(-1,1)*1.0)*dt*ease;
+    g.w *= Math.pow(0.55,dt);
+    g.a += g.w*dt;
+    if(Math.abs(g.a)>1.05){ fall(); return; }
+  }
+  if(g.state==="walk"){
+    const v=(150+60*diff)*(1-Math.min(Math.abs(g.a),0.9)*0.7);
+    g.x+=v*dt; g.step+=v*dt;
+    for(const d of g.doors){
+      if(d.staff&&!d.done&&Math.abs(d.x-g.x)<18){ g.state="pull"; g.curDoor=d; g.pull=35; say("Arthur wil naar binnen! Tik tik tik!"); break; }
+    }
+    if(g.x>=GOAL){ g.x=GOAL; finish(true); }
+  } else if(g.state==="pull"){
+    g.pull += (20+10*diff)*dt;
+    if(g.pull<=0.5){ g.curDoor.done=true; g.state="walk"; g.x+=20; say("Losgetrokken!"); }
+    else if(g.pull>=100){ g.curDoor.done=true; g.techs++; g.lives--; g.state="inside"; g.st=1.6; g.shake=.4; say("Weer de technische ruimte in…"); }
+  } else if(g.state==="fallen"||g.state==="inside"){
+    g.st-=dt;
+    if(g.st<=0){
+      if(g.lives<=0){ finish(false); return; }
+      if(g.state==="inside") g.x+=30;
+      g.state="walk"; g.a=rnd(-.15,.15); g.w=0;
+    }
+  }
+  if(g.state==="pull"&&g.pull<=0.5){ g.curDoor.done=true; g.state="walk"; }
+  g.taps.forEach(t=>t.t+=dt); g.taps=g.taps.filter(t=>t.t<.5);
+  g.shake=Math.max(0,g.shake-dt);
+}
+function fall(){ const g=G; g.falls++; g.lives--; g.state="fallen"; g.st=1.5; g.fallDir=Math.sign(g.a)||1; g.shake=.5; say(["Plof.","Daar ligt hij weer.","Op de vloer, alweer."][g.falls%3]); }
+function say(m){ G.msg=m; G.msgT=1.6; }
+
+// ---------- Drawing ----------
+function draw(){
+  const g=G; cx.save();
+  if(g.shake>0) cx.translate(rnd(-6,6)*g.shake,rnd(-6,6)*g.shake);
+  const cam = g.x - W*0.5/S; // world x at screen left (in world units scaled)
+  // wall
+  cx.fillStyle="#efe3c4"; cx.fillRect(0,0,W,FLOOR);
+  const grd=cx.createLinearGradient(0,0,0,FLOOR); grd.addColorStop(0,"rgba(0,0,0,.18)"); grd.addColorStop(.35,"rgba(0,0,0,0)");
+  cx.fillStyle=grd; cx.fillRect(0,0,W,FLOOR);
+  // ceiling lights
+  for(let lx=Math.floor(cam/180)*180; lx<cam+W/S+180; lx+=180){
+    const sx=(lx-cam)*S; const rg=cx.createRadialGradient(sx,0,0,sx,0,140*S);
+    rg.addColorStop(0,"rgba(255,240,200,.55)"); rg.addColorStop(1,"rgba(255,240,200,0)"); cx.fillStyle=rg; cx.fillRect(sx-150*S,0,300*S,200*S);
+  }
+  // skirting (terrazzo)
+  cx.fillStyle="#d8c7a6"; cx.fillRect(0,FLOOR-14*S,W,14*S);
+  // doors
+  for(const d of g.doors){
+    const sx=(d.x-cam)*S; if(sx<-120*S||sx>W+120*S) continue;
+    drawDoor(sx,d, g.curDoor===d && (g.state==="pull"||g.state==="inside"));
+  }
+  // carpet with stripes
+  cx.fillStyle="#7d5f4c"; cx.fillRect(0,FLOOR,W,H-FLOOR);
+  const sp=5*S; const off=((cam*S)%sp+sp)%sp;
+  for(let i=-1, x=-off; x<W+sp; x+=sp, i++){
+    const k=Math.floor((x+cam*S)/sp);
+    const h=((k*9301+49297)%233280)/233280;
+    cx.fillStyle = h<.33?"#2b1d16":h<.6?"#c79a80":"#5a4033";
+    cx.fillRect(x,FLOOR,sp*0.55,H-FLOOR);
+  }
+  const cg=cx.createLinearGradient(0,FLOOR,0,H); cg.addColorStop(0,"rgba(0,0,0,.35)"); cg.addColorStop(.25,"rgba(0,0,0,0)");
+  cx.fillStyle=cg; cx.fillRect(0,FLOOR,W,H-FLOOR);
+
+  // characters
+  const ax=arthurScreenX();
+  if(g.state!=="inside") drawGroup(ax,FLOOR+18*S,g);
+  // taps
+  for(const t of g.taps){ cx.globalAlpha=1-t.t/.5; cx.strokeStyle="#fff"; cx.lineWidth=3; cx.beginPath(); cx.arc(t.x,t.y,(14+t.t*60)*S,0,Math.PI*2); cx.stroke(); cx.globalAlpha=1; }
+  cx.restore();
+
+  drawHUD(g);
+  if(g.glitch>0) drawGlitch(g);
+}
+function drawDoor(sx,d,open){
+  const dw=78*S, dh=190*S, top=FLOOR-14*S-dh;
+  cx.fillStyle="#b9884f"; cx.fillRect(sx-dw/2-7*S,top-7*S,dw+14*S,dh+7*S); // frame
+  if(open){
+    cx.fillStyle="#f6f6f2"; cx.fillRect(sx-dw/2,top,dw,dh);
+    // electrical cabinet
+    cx.fillStyle="#fff"; cx.strokeStyle="#bbb"; cx.lineWidth=1;
+    cx.fillRect(sx-24*S,top+12*S,48*S,150*S); cx.strokeRect(sx-24*S,top+12*S,48*S,150*S);
+    cx.fillStyle="#2a8a4a"; cx.fillRect(sx-24*S,top+12*S,48*S,8*S);
+    for(let i=0;i<5;i++){ cx.fillStyle="#555"; cx.fillRect(sx-18*S,top+(32+i*24)*S,36*S,5*S); }
+    cx.strokeStyle="#e8c400"; cx.lineWidth=3*S; cx.beginPath(); cx.moveTo(sx+26*S,top+100*S); cx.bezierCurveTo(sx+40*S,top+130*S,sx+20*S,top+150*S,sx+34*S,top+180*S); cx.stroke();
+    // open door leaf
+    cx.fillStyle="#a8743f"; cx.beginPath(); cx.moveTo(sx+dw/2,top); cx.lineTo(sx+dw/2+22*S,top+10*S); cx.lineTo(sx+dw/2+22*S,top+dh-6*S); cx.lineTo(sx+dw/2,top+dh); cx.fill();
+  } else {
+    const wg=cx.createLinearGradient(sx-dw/2,0,sx+dw/2,0); wg.addColorStop(0,"#a87542"); wg.addColorStop(.5,"#c08a52"); wg.addColorStop(1,"#a26f3d");
+    cx.fillStyle=wg; cx.fillRect(sx-dw/2,top,dw,dh);
+    cx.fillStyle="#cfcfcf"; cx.fillRect(sx+dw/2-14*S,top+dh*0.5,9*S,3*S);
+  }
+  if(d.staff){
+    cx.fillStyle="#1f5a3c"; cx.fillRect(sx+dw/2+12*S,top+30*S,58*S,26*S);
+    cx.fillStyle="#e9f0e4"; cx.font=`800 ${9*S}px "Bricolage Grotesque",sans-serif`; cx.textAlign="center"; cx.fillText("STAFF ONLY",sx+dw/2+41*S,top+47*S);
+  } else {
+    cx.fillStyle=d.goal?"#1f5a3c":"#8b6a3e"; cx.fillRect(sx-16*S,top+24*S,32*S,16*S);
+    cx.fillStyle="#fff"; cx.font=`800 ${10*S}px "Bricolage Grotesque",sans-serif`; cx.textAlign="center"; cx.fillText(d.num,sx,top+36*S);
+    if(d.goal){ cx.fillStyle="#1f5a3c"; cx.font=`800 ${13*S}px "Bricolage Grotesque",sans-serif`; cx.fillText("BED ⇢",sx,top-16*S); }
+  }
+}
+function person(x,y,ang,o){ // o: colors, pose; pivot at feet
+  cx.save(); cx.translate(x,y); cx.rotate(ang); cx.scale(S,S);
+  const step=o.step||0;
+  // legs
+  cx.strokeStyle=o.pants; cx.lineCap="round"; cx.lineWidth=o.legW||13;
+  cx.beginPath(); cx.moveTo(-5,-70); cx.lineTo(-6+Math.sin(step)*10,-4); cx.stroke();
+  cx.beginPath(); cx.moveTo(5,-70); cx.lineTo(6-Math.sin(step)*10,-4); cx.stroke();
+  if(o.bare){ cx.strokeStyle="#e9b99a"; cx.lineWidth=10; cx.beginPath(); cx.moveTo(-6+Math.sin(step)*10,-38); cx.lineTo(-6+Math.sin(step)*10,-6); cx.moveTo(6-Math.sin(step)*10,-38); cx.lineTo(6-Math.sin(step)*10,-6); cx.stroke(); }
+  // shoes
+  cx.fillStyle=o.shoe||"#8a8f80"; cx.beginPath(); cx.ellipse(-4+Math.sin(step)*10,-2,10,5,0,0,7); cx.ellipse(8-Math.sin(step)*10,-2,10,5,0,0,7); cx.fill();
+  // torso
+  cx.fillStyle=o.top; roundRect(-19,-128,38,64,14); cx.fill();
+  // arms
+  cx.strokeStyle=o.top; cx.lineWidth=11;
+  for(const arm of o.arms){ cx.beginPath(); cx.moveTo(arm[0],-118); cx.quadraticCurveTo(arm[1],arm[2],arm[3],arm[4]); cx.stroke(); cx.fillStyle="#e9b99a"; cx.beginPath(); cx.arc(arm[3],arm[4],5.5,0,7); cx.fill(); }
+  if(o.watch){ cx.fillStyle="#c9c9c9"; cx.fillRect(o.arms[0][3]-6,o.arms[0][4]-10,9,6); }
+  // head
+  cx.fillStyle="#efc3a4"; cx.beginPath(); cx.arc(0,-146,17,0,7); cx.fill();
+  cx.fillStyle=o.hair; cx.beginPath(); cx.arc(0,-152,18,Math.PI*1.05,Math.PI*2.0); cx.fill();
+  if(o.curly){ for(let i=-2;i<=2;i++){ cx.beginPath(); cx.arc(i*7,-163,7,0,7); cx.fill(); } }
+  if(o.glasses){ cx.fillStyle="#7a4a1c"; cx.beginPath(); cx.ellipse(-7,-118,6,5,.3,0,7); cx.ellipse(6,-116,6,5,-.3,0,7); cx.fill(); cx.fillStyle="#d9a24a"; cx.fillRect(-1,-120,2,3); }
+  if(o.face){ cx.fillStyle="#2a1f17"; cx.beginPath(); cx.arc(-6+o.face,-146,2,0,7); cx.arc(6+o.face,-146,2,0,7); cx.fill();
+    cx.strokeStyle="#2a1f17"; cx.lineWidth=2; cx.beginPath(); if(o.dizzy){ cx.ellipse(o.face,-136,4,3,0,0,7);} else { cx.arc(o.face,-139,5,0.2,Math.PI-0.2);} cx.stroke(); }
+  cx.restore();
+}
+function roundRect(x,y,w,h,r){ cx.beginPath(); cx.moveTo(x+r,y); cx.arcTo(x+w,y,x+w,y+h,r); cx.arcTo(x+w,y+h,x,y+h,r); cx.arcTo(x,y+h,x,y,r); cx.arcTo(x,y,x+w,y,r); cx.closePath(); }
+function drawGroup(x,y,g){
+  const walking=g.state==="walk", step=walking?g.step/22:0;
+  const a = g.state==="fallen" ? g.fallDir*1.45 : g.a;
+  const dz = Math.abs(g.a)>.5 || g.state!=="walk";
+  // friend left (blue sweater), friend right (green shirt)
+  const reachL = g.state==="fallen"?0.25*g.fallDir:Math.max(-.2,Math.min(.35,a*.35));
+  person(x-62*S,y,reachL*.4,{top:"#8fb2d9",pants:"#1d2638",hair:"#9a7448",curly:true,shoe:"#a3a99a",bare:true,legW:13,step:step+1.4,
+    arms:[[12,40,-110,52,-102+a*-20],[-12,-30,-90,-10,-74]],face:4,watch:true});
+  person(x+62*S,y,(g.state==="fallen"?0.25*g.fallDir:-Math.max(-.35,Math.min(.2,a*.35)))*.4,{top:"#3d7a4e",pants:"#ebe6da",hair:"#3b2a1d",shoe:"#e6e6e2",step:step+0.6,
+    arms:[[-12,-40,-110,-52,-102+a*20],[12,30,-90,10,-74]],face:-4,watch:true});
+  // Arthur
+  person(x,y,a,{top:"#f2f0e8",pants:"#d6c8a8",hair:"#4a3220",shoe:"#7b8070",step:step,
+    arms:[[-14,-30,-100,-26,-82+Math.sin(g.t*4)*4],[14,30,-100,26,-82-Math.sin(g.t*4)*4]],face:Math.sin(g.t*2)*3,dizzy:dz,glasses:true});
+}
+function drawHUD(g){
+  const pad=14;
+  // progress
+  const pw=W-pad*2-90, p=Math.min(g.x/GOAL,1);
+  cx.fillStyle="rgba(0,0,0,.55)"; roundRect(pad,pad,pw,22,11); cx.fill();
+  cx.fillStyle="#1f5a3c"; roundRect(pad,pad,Math.max(22,pw*p),22,11); cx.fill();
+  cx.fillStyle="#fff"; cx.font=`800 12px "Bricolage Grotesque",sans-serif`; cx.textAlign="left";
+  cx.fillText(`Kamer 214 · ${Math.round(p*100)}%`,pad+10,pad+15);
+  cx.textAlign="right"; cx.font=`18px sans-serif`; cx.fillText("❤️".repeat(Math.max(0,g.lives))+"🖤".repeat(3-Math.max(0,g.lives)),W-pad,pad+18);
+  // balance meter
+  const bw=Math.min(260,W-60), bx=W/2-bw/2, by=pad+34;
+  cx.fillStyle="rgba(0,0,0,.45)"; roundRect(bx,by,bw,12,6); cx.fill();
+  cx.fillStyle="rgba(200,60,40,.7)"; cx.fillRect(bx,by,bw*.15,12); cx.fillRect(bx+bw*.85,by,bw*.15,12);
+  const mx=bx+bw/2+Math.max(-1,Math.min(1,g.a/1.05))*bw/2;
+  cx.fillStyle="#fff"; cx.beginPath(); cx.arc(mx,by+6,8,0,7); cx.fill();
+  // pull meter
+  if(g.state==="pull"){
+    const pw2=Math.min(300,W-40), px=W/2-pw2/2, py=FLOOR-250*S;
+    cx.fillStyle="rgba(0,0,0,.6)"; roundRect(px-8,py-30,pw2+16,52,10); cx.fill();
+    cx.fillStyle="#fff"; cx.textAlign="center"; cx.font=`800 14px "Bricolage Grotesque",sans-serif`; cx.fillText("TIK SNEL! Hij wil naar binnen",W/2,py-12);
+    cx.fillStyle="#333"; roundRect(px,py,pw2,12,6); cx.fill();
+    cx.fillStyle=g.pull>70?"#e0452e":"#f0b429"; roundRect(px,py,pw2*g.pull/100,12,6); cx.fill();
+  }
+  // arrows hint near start
+  if(g.t<5 && g.state==="walk"){
+    cx.globalAlpha=Math.min(1,(5-g.t)); cx.fillStyle="#fff"; cx.font=`800 15px "Bricolage Grotesque",sans-serif`; cx.textAlign="center";
+    cx.fillText("◀ tik links    tik rechts ▶",W/2,FLOOR+70*S); cx.globalAlpha=1;
+  }
+  if(g.msgT>0){ cx.globalAlpha=Math.min(1,g.msgT*2); cx.fillStyle="rgba(31,90,60,.92)"; cx.font=`800 18px "Bricolage Grotesque",sans-serif`;
+    const tw=cx.measureText(g.msg).width+28; roundRect(W/2-tw/2,FLOOR+90*S,tw,36,8); cx.fill(); cx.fillStyle="#fff"; cx.textAlign="center"; cx.fillText(g.msg,W/2,FLOOR+90*S+24); cx.globalAlpha=1; }
+}
+function drawGlitch(g){
+  // seeded pseudo-random so the damage stays put, with flicker
+  let s=Math.floor(g.gseed*1e6)+1; const r=()=>{ s=(s*16807)%2147483647; return s/2147483647; };
+  const flick = Math.random()<.12;
+  const n=6+Math.floor(r()*8);
+  for(let i=0;i<n;i++){
+    const x=r()*W, w=1+r()*(r()<.2?18:4);
+    const c=["#00ff88","#ff2bd6","#ffffff","#2b6bff","#ffee00","#000"][Math.floor(r()*6)];
+    cx.globalAlpha=flick?.3:.85; cx.fillStyle=c; cx.fillRect(x,0,w,H);
+  }
+  // horizontal tearing band
+  const by=r()*H, bh=20+r()*60;
+  cx.globalAlpha=.5; cx.drawImage(cv,0,by*DPR,W*DPR,bh*DPR,(r()-.5)*40,by,W,bh);
+  // dead black block + crack
+  cx.globalAlpha=.9; cx.fillStyle="#000"; const bx=r()*W*0.8, bY=r()*H*0.8; cx.fillRect(bx,bY,40+r()*90,20+r()*70);
+  cx.globalAlpha=.8; cx.strokeStyle="#fff"; cx.lineWidth=1.2;
+  const ox=r()*W, oy=r()*H;
+  for(let k=0;k<7;k++){ cx.beginPath(); cx.moveTo(ox,oy); let px=ox,py=oy, ang=r()*Math.PI*2;
+    for(let j=0;j<5;j++){ ang+=(r()-.5)*.8; px+=Math.cos(ang)*(40+r()*80); py+=Math.sin(ang)*(40+r()*80); cx.lineTo(px,py);} cx.stroke(); }
+  cx.globalAlpha=1;
+}
+
+// ---------- Loop ----------
+function loop(ts){
+  if(!running) return;
+  const dt=Math.min(.05,(ts-last)/1000||0); last=ts;
+  update(dt); if(G) draw();
+  if(running) requestAnimationFrame(loop);
+}
+
+// ---------- Flow ----------
+const $=id=>document.getElementById(id);
+try{ $("name").value=localStorage.getItem("arthurName")||""; }catch(e){}
+function start(){
+  playerName=($("name").value||"").trim().slice(0,16);
+  if(!playerName){ $("name").focus(); $("name").style.borderColor="#e0452e"; return; }
+  try{ localStorage.setItem("arthurName",playerName); }catch(e){}
+  $("start").classList.add("hidden"); $("end").classList.add("hidden");
+  G=newGame(); running=true; last=performance.now(); requestAnimationFrame(loop);
+}
+$("go").onclick=start;
+$("name").addEventListener("keydown",e=>{ if(e.key==="Enter") start(); });
+$("again").onclick=()=>{ $("end").classList.add("hidden"); $("start").classList.remove("hidden"); };
+$("showBoard").onclick=()=>showEnd(null);
+
+async function finish(won){
+  running=false;
+  const g=G, prog=Math.min(g.x/GOAL,1);
+  let score=Math.round(prog*1000);
+  if(won) score += 1000 + g.lives*500 + Math.max(0,Math.round((90-g.t)*10));
+  const run={name:playerName, score, won, at:Date.now()};
+  draw();
+  $("endTitle").textContent = won ? "Arthur ligt in bed!" : "Arthur haalt het niet…";
+  $("endText").textContent = won
+    ? `In ${Math.round(g.t)} s, met ${g.falls}× vallen en ${g.techs}× technische ruimte.`
+    : `Hij strandde op ${Math.round(prog*100)}% van de gang (${g.falls}× gevallen, ${g.techs}× technische ruimte).`;
+  $("endSign").textContent = won ? "KAMER 214" : "STAFF ONLY";
+  $("endScore").textContent = score;
+  showEnd(run, true);
+  await LB.add(run);
+  showEnd(run);
+}
+async function showEnd(run, quick){
+  $("start").classList.add("hidden"); $("end").classList.remove("hidden");
+  if(!run){ $("endTitle").textContent="Scorebord"; $("endText").textContent=""; $("endScore").textContent=""; $("endSign").textContent="STAFF ONLY"; }
+  const tb=$("board");
+  if(quick){ tb.innerHTML="<tr><td>Scorebord laden…</td></tr>"; return; }
+  const {rows,shared}=await LB.all();
+  rows.sort((a,b)=>b.score-a.score);
+  const top=rows.slice(0,10);
+  tb.innerHTML="";
+  if(!top.length){ tb.innerHTML="<tr><td>Nog geen scores.</td></tr>"; }
+  top.forEach((r,i)=>{
+    const tr=document.createElement("tr");
+    if(run && r.at===run.at && r.name===run.name) tr.className="me";
+    const a=document.createElement("td"); a.textContent=(i===0?"🏆 ":(i+1)+". ")+r.name+(r.won?" 🛏️":"");
+    const b=document.createElement("td"); b.className="r"; b.textContent=r.score;
+    tr.append(a,b); tb.append(tr);
+  });
+  $("boardNote").textContent = shared ? "Gedeeld scorebord: iedereen met de link ziet dit." : "Alleen op dit toestel opgeslagen.";
+}
+// idle backdrop
+G=newGame(); G.state="idle"; draw();
+</script>
+</body>
+</html>
