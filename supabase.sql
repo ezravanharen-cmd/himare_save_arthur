@@ -20,3 +20,6 @@ create policy "score toevoegen" on public.scores
   for insert to anon with check (true);
 
 create index if not exists scores_score_idx on public.scores (score desc);
+
+-- Nieuwere Supabase-projecten geven de anon-rol niet automatisch rechten
+grant select, insert on public.scores to anon;
