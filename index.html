@@ -43,7 +43,7 @@
       <div>📱 Scherm kapot? Gewoon doorspelen.</div>
       <div>❤️ 3 levens. Elke val of technische ruimte kost er één.</div>
     </div>
-    <input id="name" maxlength="16" placeholder="Jouw naam" autocomplete="off">
+    <input id="name" maxlength="7" placeholder="Naam (max 7)" autocomplete="off">
     <button id="go">Start</button>
     <button id="showBoard" class="sec">Scorebord</button>
   </div>
@@ -62,45 +62,58 @@
 </div>
 
 <script>
-// ---------- Leaderboard (shared via db, fallback local) ----------
+// ---------- Leaderboard ----------
+// Supabase (gedeeld, zonder account). Vul URL en anon key in.
+const SUPABASE_URL = "";
+const SUPABASE_KEY = "";
 const LB = {
   db:null, uid:null, ready:false,
+  get sb(){ return !!(SUPABASE_URL && SUPABASE_KEY); },
+  hdr(){ return {apikey:SUPABASE_KEY, Authorization:"Bearer "+SUPABASE_KEY, "Content-Type":"application/json"}; },
   async init(){
+    if(this.sb) return;
     try{
       if(!window.claude || !claude.use) return;
       const t = new Promise(r=>setTimeout(()=>r(null),10000));
-      const [db,user] = await Promise.race([Promise.all([claude.use("db"),claude.use("user")]), t.then(()=>[null,null])]) || [null,null];
+      const res = await Promise.race([Promise.all([claude.use("db"),claude.use("user")]), t]);
+      const [db,user] = res || [null,null];
       if(db && user){ this.db=db; this.uid=await user.id(); this.ready=!!this.uid; }
     }catch(e){ this.db=null; }
   },
   norm(x){ if(!x) return null; if(typeof x.data==="function") return x.data(); if(x.data && typeof x.data==="object") return x.data; return x; },
+  local(){ try{ return JSON.parse(localStorage.getItem("arthurScores")||"[]"); }catch(e){ return []; } },
   async all(){
-    let rows=[];
-    if(this.ready){
+    if(this.sb){
+      try{
+        const r = await fetch(SUPABASE_URL+"/rest/v1/scores?select=name,score,won,created_at&order=score.desc&limit=10",{headers:this.hdr()});
+        if(r.ok){ const rows=(await r.json()).map(x=>({name:x.name,score:x.score,won:x.won,at:Date.parse(x.created_at)})); return {rows,shared:true}; }
+      }catch(e){}
+    } else if(this.ready){
       try{
         const res = await this.db.collection("scores").get();
         const list = Array.isArray(res)?res:(res&&(res.docs||res.items||res.rows))||[];
-        for(const d of list){ const v=this.norm(d); if(v&&Array.isArray(v.runs)) rows.push(...v.runs); }
+        const rows=[]; for(const d of list){ const v=this.norm(d); if(v&&Array.isArray(v.runs)) rows.push(...v.runs); }
         return {rows, shared:true};
       }catch(e){}
     }
-    try{ rows = JSON.parse(localStorage.getItem("arthurScores")||"[]"); }catch(e){}
-    return {rows, shared:false};
+    return {rows:this.local(), shared:false};
   },
   async add(run){
-    if(this.ready){
+    if(this.sb){
+      try{
+        const r = await fetch(SUPABASE_URL+"/rest/v1/scores",{method:"POST",headers:{...this.hdr(),Prefer:"return=minimal"},
+          body:JSON.stringify({name:run.name,score:run.score,won:run.won})});
+        if(r.ok){ run.shared=true; return true; }
+      }catch(e){}
+    } else if(this.ready){
       try{
         const ref = this.db.doc("scores/"+this.uid);
         let cur=null; try{ cur=this.norm(await ref.get()); }catch(e){}
         const runs=(cur&&Array.isArray(cur.runs)?cur.runs:[]).concat(run).sort((a,b)=>b.score-a.score).slice(0,8);
-        await ref.set({runs});
-        return true;
+        await ref.set({runs}); return true;
       }catch(e){}
     }
-    try{
-      const r=JSON.parse(localStorage.getItem("arthurScores")||"[]"); r.push(run);
-      r.sort((a,b)=>b.score-a.score); localStorage.setItem("arthurScores",JSON.stringify(r.slice(0,20)));
-    }catch(e){}
+    try{ const r=this.local(); r.push(run); r.sort((a,b)=>b.score-a.score); localStorage.setItem("arthurScores",JSON.stringify(r.slice(0,20))); }catch(e){}
     return false;
   }
 };
@@ -369,7 +382,7 @@ function loop(ts){
 const $=id=>document.getElementById(id);
 try{ $("name").value=localStorage.getItem("arthurName")||""; }catch(e){}
 function start(){
-  playerName=($("name").value||"").trim().slice(0,16);
+  playerName=($("name").value||"").trim().slice(0,7);
   if(!playerName){ $("name").focus(); $("name").style.borderColor="#e0452e"; return; }
   try{ localStorage.setItem("arthurName",playerName); }catch(e){}
   $("start").classList.add("hidden"); $("end").classList.add("hidden");
@@ -404,12 +417,12 @@ async function showEnd(run, quick){
   if(quick){ tb.innerHTML="<tr><td>Scorebord laden…</td></tr>"; return; }
   const {rows,shared}=await LB.all();
   rows.sort((a,b)=>b.score-a.score);
-  const top=rows.slice(0,10);
+  const top=rows.slice(0,10); let marked=false;
   tb.innerHTML="";
   if(!top.length){ tb.innerHTML="<tr><td>Nog geen scores.</td></tr>"; }
   top.forEach((r,i)=>{
     const tr=document.createElement("tr");
-    if(run && r.at===run.at && r.name===run.name) tr.className="me";
+    if(run && !marked && r.name===run.name && r.score===run.score){ tr.className="me"; marked=true; }
     const a=document.createElement("td"); a.textContent=(i===0?"🏆 ":(i+1)+". ")+r.name+(r.won?" 🛏️":"");
     const b=document.createElement("td"); b.className="r"; b.textContent=r.score;
     tr.append(a,b); tb.append(tr);
