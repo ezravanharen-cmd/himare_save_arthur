@@ -64,12 +64,12 @@
 <script>
 // ---------- Leaderboard ----------
 // Supabase (gedeeld, zonder account). Vul URL en anon key in.
-const SUPABASE_URL = "";
-const SUPABASE_KEY = "";
+const SUPABASE_URL = "https://iqwbjimxoucdmrkdffer.supabase.co";
+const SUPABASE_KEY = "sb_publishable_SFLdFA61aq0U1MN1vWP29A_LesVWDxv";
 const LB = {
   db:null, uid:null, ready:false,
   get sb(){ return !!(SUPABASE_URL && SUPABASE_KEY); },
-  hdr(){ return {apikey:SUPABASE_KEY, Authorization:"Bearer "+SUPABASE_KEY, "Content-Type":"application/json"}; },
+  hdr(){ return {apikey:SUPABASE_KEY, "Content-Type":"application/json"}; },
   async init(){
     if(this.sb) return;
     try{
